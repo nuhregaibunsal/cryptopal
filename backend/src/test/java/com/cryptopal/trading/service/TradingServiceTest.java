@@ -117,4 +117,111 @@ class TradingServiceTest {
         verify(walletRepository, never()).save(any());
         verify(transactionRepository, never()).save(any());
     }
+
+    @Test
+    void buy_withExactBalance_succeedsAndLeavesZeroCash() {
+        when(marketPriceCache.getPrice("BTC")).thenReturn(Optional.of(new BigDecimal("100.00")));
+        Wallet wallet = new Wallet(1L, new BigDecimal("200.00"));
+        when(walletRepository.findByUserId(1L)).thenReturn(Optional.of(wallet));
+        when(holdingRepository.findByUserIdAndAssetSymbol(1L, "BTC")).thenReturn(Optional.empty());
+
+        OrderResponse response = tradingService.execute(1L,
+                new OrderRequest("BTC", OrderSide.BUY, new BigDecimal("2")));
+
+        assertThat(response.cashBalance()).isEqualByComparingTo("0.00");
+        assertThat(wallet.getCashBalance()).isEqualByComparingTo("0.00");
+    }
+
+    @Test
+    void buy_oneCentShort_isRejected() {
+        when(marketPriceCache.getPrice("BTC")).thenReturn(Optional.of(new BigDecimal("100.00")));
+        when(walletRepository.findByUserId(1L)).thenReturn(Optional.of(new Wallet(1L, new BigDecimal("199.99"))));
+
+        assertThatThrownBy(() -> tradingService.execute(1L,
+                new OrderRequest("BTC", OrderSide.BUY, new BigDecimal("2"))))
+                .isInstanceOf(InsufficientFundsException.class);
+    }
+
+    @Test
+    void buy_addsToExistingHolding() {
+        when(marketPriceCache.getPrice("ETH")).thenReturn(Optional.of(new BigDecimal("50.00")));
+        Wallet wallet = new Wallet(1L, new BigDecimal("1000.00"));
+        when(walletRepository.findByUserId(1L)).thenReturn(Optional.of(wallet));
+        Holding holding = new Holding(1L, "ETH", new BigDecimal("1.5"));
+        when(holdingRepository.findByUserIdAndAssetSymbol(1L, "ETH")).thenReturn(Optional.of(holding));
+
+        tradingService.execute(1L, new OrderRequest("ETH", OrderSide.BUY, new BigDecimal("2")));
+
+        assertThat(holding.getVolume()).isEqualByComparingTo("3.5");
+        assertThat(wallet.getCashBalance()).isEqualByComparingTo("900.00");
+    }
+
+    @Test
+    void buy_roundsCostToTwoDecimalsHalfUp() {
+        when(marketPriceCache.getPrice("BTC")).thenReturn(Optional.of(new BigDecimal("0.333")));
+        Wallet wallet = new Wallet(1L, new BigDecimal("10.00"));
+        when(walletRepository.findByUserId(1L)).thenReturn(Optional.of(wallet));
+        when(holdingRepository.findByUserIdAndAssetSymbol(1L, "BTC")).thenReturn(Optional.empty());
+
+        // 0.333 * 5 = 1.665 -> 1.67 (half up)
+        OrderResponse response = tradingService.execute(1L,
+                new OrderRequest("BTC", OrderSide.BUY, new BigDecimal("5")));
+
+        assertThat(response.totalValue()).isEqualByComparingTo("1.67");
+        assertThat(wallet.getCashBalance()).isEqualByComparingTo("8.33");
+    }
+
+    @Test
+    void symbolIsNormalisedToUpperCase() {
+        when(marketPriceCache.getPrice("BTC")).thenReturn(Optional.of(new BigDecimal("100.00")));
+        when(walletRepository.findByUserId(1L)).thenReturn(Optional.of(new Wallet(1L, new BigDecimal("500.00"))));
+        when(holdingRepository.findByUserIdAndAssetSymbol(1L, "BTC")).thenReturn(Optional.empty());
+
+        OrderResponse response = tradingService.execute(1L,
+                new OrderRequest("btc", OrderSide.BUY, new BigDecimal("1")));
+
+        assertThat(response.symbol()).isEqualTo("BTC");
+    }
+
+    @Test
+    void sell_entireHolding_leavesZeroVolume() {
+        when(marketPriceCache.getPrice("BTC")).thenReturn(Optional.of(new BigDecimal("100.00")));
+        Holding holding = new Holding(1L, "BTC", new BigDecimal("2"));
+        when(holdingRepository.findByUserIdAndAssetSymbol(1L, "BTC")).thenReturn(Optional.of(holding));
+        Wallet wallet = new Wallet(1L, new BigDecimal("0.00"));
+        when(walletRepository.findByUserId(1L)).thenReturn(Optional.of(wallet));
+
+        tradingService.execute(1L, new OrderRequest("BTC", OrderSide.SELL, new BigDecimal("2")));
+
+        assertThat(holding.getVolume()).isEqualByComparingTo("0");
+        assertThat(wallet.getCashBalance()).isEqualByComparingTo("200.00");
+    }
+
+    @Test
+    void sell_withoutAnyHolding_throwsAndWritesNothing() {
+        when(marketPriceCache.getPrice("BTC")).thenReturn(Optional.of(new BigDecimal("100.00")));
+        when(holdingRepository.findByUserIdAndAssetSymbol(1L, "BTC")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> tradingService.execute(1L,
+                new OrderRequest("BTC", OrderSide.SELL, new BigDecimal("1"))))
+                .isInstanceOf(InsufficientHoldingsException.class);
+
+        verify(walletRepository, never()).save(any());
+        verify(transactionRepository, never()).save(any());
+    }
+
+    @Test
+    void buyThenSellSameVolumeAtSamePrice_restoresCash() {
+        when(marketPriceCache.getPrice("BTC")).thenReturn(Optional.of(new BigDecimal("123.45")));
+        Wallet wallet = new Wallet(1L, new BigDecimal("1000.00"));
+        when(walletRepository.findByUserId(1L)).thenReturn(Optional.of(wallet));
+        Holding holding = new Holding(1L, "BTC", BigDecimal.ZERO);
+        when(holdingRepository.findByUserIdAndAssetSymbol(1L, "BTC")).thenReturn(Optional.of(holding));
+
+        tradingService.execute(1L, new OrderRequest("BTC", OrderSide.BUY, new BigDecimal("3")));
+        tradingService.execute(1L, new OrderRequest("BTC", OrderSide.SELL, new BigDecimal("3")));
+
+        assertThat(wallet.getCashBalance()).isEqualByComparingTo("1000.00");
+        assertThat(holding.getVolume()).isEqualByComparingTo("0");
+    }
 }
