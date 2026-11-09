@@ -1,5 +1,7 @@
 # CryptoPal
 
+[![CI](https://github.com/nuhregaibunsal/cryptopal/actions/workflows/ci.yml/badge.svg)](https://github.com/nuhregaibunsal/cryptopal/actions/workflows/ci.yml)
+
 Real-time crypto trading & AI-insights platform. CryptoPal streams live market
 prices, lets users execute simulated buy/sell trades against a starting balance,
 tracks their portfolio, and answers natural-language questions about their
